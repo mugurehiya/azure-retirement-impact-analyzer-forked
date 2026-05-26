@@ -23,10 +23,14 @@
 #      - AZURE_TENANT_ID      — Azure AD tenant ID
 #      - AZURE_SUBSCRIPTION_ID — Default subscription for az graph queries
 #
-#   3. Fork must have Actions enabled and "Allow all actions" (or at least the
+#   3. Optional repository variable (Settings → Secrets and variables → Variables):
+#      - NOTIFY_USERS — comma-separated GitHub usernames to @mention in validation
+#        failure issues (e.g. "user1,user2"). If not set, no @mentions are added.
+#
+#   4. Fork must have Actions enabled and "Allow all actions" (or at least the
 #      actions referenced below) in Settings → Actions → General.
 #
-#   4. The GITHUB_TOKEN needs permission to create PRs on the upstream repo.
+#   5. The GITHUB_TOKEN needs permission to create PRs on the upstream repo.
 #      GitHub grants this automatically for public fork → upstream PRs.
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -176,6 +180,12 @@ jobs:
           BODY+="1. Review the failed queries above.\n"
           BODY+="2. Fix the KQL generation logic or the queries themselves.\n"
           BODY+="3. Re-run the workflow manually via **Actions → Sync queries.txt → Run workflow**.\n"
+
+          # @mention configured users if NOTIFY_USERS variable is set
+          if [ -n "${{ vars.NOTIFY_USERS }}" ]; then
+            MENTIONS=$(echo "${{ vars.NOTIFY_USERS }}" | tr ',' '\n' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' | sed 's/^/@/' | tr '\n' ' ')
+            BODY+="\n---\ncc ${MENTIONS}\n"
+          fi
 
           # Check for existing open issue to avoid duplicates
           EXISTING=$(gh issue list --state open --label "queries-validation-failure" --json number --jq '.[0].number' 2>/dev/null || echo "")
