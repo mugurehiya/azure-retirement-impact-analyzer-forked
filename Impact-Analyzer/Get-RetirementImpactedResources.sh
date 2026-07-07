@@ -1,65 +1,74 @@
 #!/usr/bin/env bash
-
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
+#
+# Get Retirement Impacted Resources
+# Queries Azure Resource Graph to identify retiring Azure resources
+# Output: CSV file with all impacted resources across all queries
 
 set -o pipefail
+
 QueriesFile="queries.txt"
 OutputFile="impactedresources.csv"
 
-# Colors
+# Colors for output
 CYAN='\033[0;36m'
 GREEN='\033[0;32m'
+RED='\033[0;31m'
 NC='\033[0m'
 
-# Validate dependencies
+# ============================================================================
+# Validate Dependencies
+# ============================================================================
 if ! command -v az >/dev/null 2>&1; then
-    echo "Azure CLI 'az' is not installed or not found in PATH."
+    echo -e "${RED}Error: Azure CLI 'az' is not installed or not found in PATH.${NC}"
     exit 1
 fi
 
 if ! command -v jq >/dev/null 2>&1; then
-    echo "'jq' is required but not installed. Install it and rerun the script."
-    echo "Example: sudo apt-get install jq"
+    echo -e "${RED}Error: 'jq' is required but not installed.${NC}"
+    echo "Install using: sudo apt-get install jq"
     exit 1
 fi
 
 if [ ! -f "$QueriesFile" ]; then
-    echo "Queries file not found: $QueriesFile"
+    echo -e "${RED}Error: Queries file not found: $QueriesFile${NC}"
     exit 1
 fi
 
-# Pre-install resource-graph extension silently
+# ============================================================================
+# Setup and Configuration
+# ============================================================================
 az extension add -n resource-graph --only-show-errors 2>/dev/null
-
 az config set extension.dynamic_install_allow_preview=true --only-show-errors 2>/dev/null
 
 TempDir="${TMPDIR:-/tmp}"
 TempFile="$TempDir/arg-query-temp.kql"
 AllResultsFile="$(mktemp "$TempDir/arg-results-XXXXXX.jsonl")"
-QueryNumber=1
 
-while IFS= read -r Query || [ -n "$Query" ]; do
-    # Skip blank lines
+# ============================================================================
+# Process All Queries
+# ============================================================================
+mapfile -t Queries < "$QueriesFile"
+QueryCount=0
+TotalImpacted=0
+
+for Query in "${Queries[@]}"; do
     if [[ -z "${Query//[[:space:]]/}" ]]; then
         continue
     fi
 
-    # Trim leading/trailing whitespace
     Query="$(echo "$Query" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-
-    # Extract RetiringFeature from query
+    
     RetiringFeature="Unknown"
-
     if [[ "$Query" =~ RetiringFeature[[:space:]]*=[[:space:]]*\"([^\"]+)\" ]]; then
         RetiringFeature="${BASH_REMATCH[1]}"
     fi
 
     echo ""
     echo -e "${CYAN}=========== RetiringFeature : \"$RetiringFeature\" ===========${NC}"
-
     echo "$Query"
-    echo "----------------------------------------------------------------"
+    echo "================================================================"
 
     printf "%s" "$Query" > "$TempFile"
     SkipToken=""
@@ -72,69 +81,63 @@ while IFS= read -r Query || [ -n "$Query" ]; do
             Result="$(az graph query -q "@$TempFile" -o json 2>/dev/null)"
         fi
 
-        # If az graph query fails or returns empty response, stop processing this query
-
         if [ -z "$Result" ]; then
             break
         fi
 
-        # Append returned data rows
         echo "$Result" | jq -c '.data[]?' >> "$QueryResultsFile"
-
-        # Get next skip token, if present
         SkipToken="$(echo "$Result" | jq -r '.skipToken // .skip_token // empty')"
 
         if [ -z "$SkipToken" ]; then
             break
         fi
-
     done
 
-    ImpactedCount="$(wc -l < "$QueryResultsFile" | tr -d ' ')"
-
-    if [ "$ImpactedCount" -eq 0 ]; then
-        echo -e "${GREEN}No resources impacted${NC}"
-    else
-        echo -e "${GREEN}${ImpactedCount} resources impacted${NC}"
-        # Print readable preview
+    ImpactedCount=0
+    if [ -f "$QueryResultsFile" ] && [ -s "$QueryResultsFile" ]; then
+        ImpactedCount="$(wc -l < "$QueryResultsFile" 2>/dev/null | tr -d ' ')"
+        echo -e "${GREEN}$ImpactedCount resources impacted${NC}"
         jq -r '.' "$QueryResultsFile"
-
-        # Add metadata to each result for tracking
-        jq -c --arg rf "$RetiringFeature" '
-            . + {
-                RetiringFeature: $rf,
-                subscriptionId: (
-                    (.id // "")
-                    | capture("/subscriptions/(?<sub>[^/]+)/").sub // ""
-                )
-            }
-        ' "$QueryResultsFile" >> "$AllResultsFile"
+        TotalImpacted=$((TotalImpacted + ImpactedCount))
+        cat "$QueryResultsFile" >> "$AllResultsFile"
+    else
+        echo -e "${GREEN}No resources impacted${NC}"
     fi
 
     rm -f "$QueryResultsFile"
-    QueryNumber=$((QueryNumber + 1))
+    QueryCount=$((QueryCount + 1))
+done
 
-done < "$QueriesFile"
 rm -f "$TempFile"
 
-# Export results if output file specified
-TotalResults="$(wc -l < "$AllResultsFile" | tr -d ' ')"
+# ============================================================================
+# Export Results to CSV
+# ============================================================================
+TotalResults=0
+if [ -f "$AllResultsFile" ] && [ -s "$AllResultsFile" ]; then
+    TotalResults="$(wc -l < "$AllResultsFile" | tr -d ' ')"
+fi
 
-if [ -n "$OutputFile" ] && [ "$TotalResults" -gt 0 ]; then
+if [ "$TotalResults" -gt 0 ]; then
     jq -r -s '
-        if length == 0 then
-            empty
-        else
-            (map(keys_unsorted) | add | unique) as $cols
-            | $cols,
-              (.[] | [ $cols[] as $c | .[$c] ])
-            | @csv
-        end
+        (reduce .[] as $obj ({}; . + $obj) | keys_unsorted) as $keys |
+        ([$keys[] | tostring] | @csv),
+        (.[] | [$keys[] as $k | (.[$k] | if type == "object" or type == "array" then tojson else . end) // ""] | @csv)
     ' "$AllResultsFile" > "$OutputFile"
-
-    echo ""
-    echo -e "${CYAN}Results exported to: $OutputFile${NC}"
-    echo -e "${CYAN}Total resources: $TotalResults${NC}"
+    
+    if [ -f "$OutputFile" ] && [ -s "$OutputFile" ]; then
+        OutputLineCount="$(wc -l < "$OutputFile" | tr -d ' ')"
+        FileSize="$(du -h "$OutputFile" | cut -f1)"
+        
+        echo ""
+        echo -e "${CYAN}Results exported to: $OutputFile${NC}"
+        echo -e "${CYAN}Total resources: $TotalResults${NC}"
+    else
+        echo -e "${RED}Error: Failed to create output file${NC}"
+        exit 1
+    fi
+else
+    echo -e "${CYAN}No resources found to export${NC}"
 fi
 
 rm -f "$AllResultsFile"
