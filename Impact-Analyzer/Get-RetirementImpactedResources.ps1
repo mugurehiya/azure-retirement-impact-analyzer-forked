@@ -78,4 +78,4 @@ if ($OutputFile -and $AllResults.Count -gt 0) {
     Write-Host ""
     Write-Host "Results exported to: $OutputFile" -ForegroundColor Cyan
     Write-Host "Total resources: $($AllResults.Count)" -ForegroundColor Cyan
-} 
+}

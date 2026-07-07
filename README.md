@@ -1,6 +1,6 @@
 # Azure Service Retirement – Impact Assessment Tool
 
-This repository provides **Azure Resource Graph (ARG) queries** and a **PowerShell utility**
+Users can access Azure retirement recommendations through [multiple channels](https://learn.microsoft.com/en-us/azure/advisor/advisor-how-to-use-service-upgrade-retirement-recommendations?tabs=portal%2Cservice-retire-2025#access-recommendations-through-multiple-channels). However, coverage of retirement recommendations for **Sovereign and National Partner Clouds** is not consistently up to date across these experiences. This repository is intended to bridge that gap by providing **Azure Resource Graph (ARG) queries** and a **PowerShell utility**
 to help customers identify Azure resources that are impacted by specific Azure service retirements.
  
 The PowerShell script automatically executes **read-only ARG queries** that are maintained in a
